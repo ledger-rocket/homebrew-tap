@@ -1,0 +1,52 @@
+# Formula CI. Every gate here runs on the GitHub-hosted macOS image's own Homebrew,
+# so there is no third-party action to pin and no secret to leak. A tap is executable
+# code on a user's machine: `brew install` runs the formula, so a formula that no
+# longer builds is a broken install for everyone who taps this.
+name: CI
+
+on:
+  pull_request:
+    # `reopened` is not in GitHub's default set for an explicit `types:` list. Without
+    # it, reopening a PR leaves the required check satisfied by a stale run.
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  formula:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Style
+        run: brew style Formula/
+
+      # Homebrew 6 refuses to operate on a loose formula path, so the checkout is
+      # tapped under its real name and every later gate addresses it that way.
+      - name: Tap this checkout
+        run: brew tap ledger-rocket/tap "$GITHUB_WORKSPACE"
+
+      - name: Audit
+        run: brew audit --strict --online --formula ledger-rocket/tap/rocket-review
+
+      - name: Build from source
+        run: brew install --build-from-source ledger-rocket/tap/rocket-review
+
+      - name: Test
+        run: brew test ledger-rocket/tap/rocket-review
+
+  ci-success:
+    name: CI Success
+    if: ${{ always() }}
+    needs: [formula]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every gate to have passed
+        run: |
+          if [ "${{ needs.formula.result }}" != "success" ]; then
+            echo "formula gate: ${{ needs.formula.result }}"
+            exit 1
+          fi

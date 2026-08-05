@@ -1,0 +1,73 @@
+# The bump lives here rather than in rocket-review's publish workflow on purpose:
+# that repo's CI is deliberately secretless (contents: read, trusted-publishing OIDC,
+# fork-PR safety as a design property), and pushing across repos would need a PAT
+# there. The sdist sha256 also does not exist until after its publish job finishes.
+name: Bump on new PyPI release
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Compare PyPI against the formula
+        id: check
+        run: |
+          set -euo pipefail
+          meta=$(curl -fsSL https://pypi.org/pypi/rocket-review/json)
+          latest=$(jq -r '.info.version' <<<"$meta")
+          current=$(sed -n 's|.*/rocket_review-\(.*\)\.tar\.gz"|\1|p' Formula/rocket-review.rb)
+          echo "latest=$latest"   >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          if [ "$latest" = "$current" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            # The sdist, not the wheel: the formula builds from source.
+            jq -r --arg v "$latest" \
+              '.releases[$v][] | select(.packagetype=="sdist") | .url, .digests.sha256' \
+              <<<"$meta" > /tmp/sdist
+            { echo "url=$(sed -n 1p /tmp/sdist)"; echo "sha=$(sed -n 2p /tmp/sdist)"; } \
+              >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rewrite the formula
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          url='${{ steps.check.outputs.url }}'
+          sha='${{ steps.check.outputs.sha }}'
+          test -n "$url" && test -n "$sha"
+          sed -i "s|^  url \".*\"|  url \"$url\"|;s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
+            Formula/rocket-review.rb
+          git diff --exit-code && { echo "formula unchanged despite a version bump"; exit 1; }
+
+      - name: Open the bump PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.check.outputs.latest }}
+          CURRENT: ${{ steps.check.outputs.current }}
+        run: |
+          set -euo pipefail
+          branch="bump/rocket-review-$LATEST"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -qam "rocket-review $LATEST"
+          git push -q -u origin "$branch"
+          gh pr create --title "rocket-review $LATEST" --body "$(printf '%s\n' \
+            "Automated bump: \`$CURRENT\` → \`$LATEST\`, url and sha256 taken from the PyPI sdist." \
+            "" \
+            "**This PR's checks do not start on their own.** GitHub does not trigger workflows" \
+            "for PRs opened with the default \`GITHUB_TOKEN\`, so close and reopen it to run CI" \
+            "before merging. Merging without a green run ships an unverified formula.")"
