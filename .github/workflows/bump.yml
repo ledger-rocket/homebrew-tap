@@ -49,7 +49,13 @@ jobs:
           test -n "$url" && test -n "$sha"
           sed -i "s|^  url \".*\"|  url \"$url\"|;s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
             Formula/rocket-review.rb
-          git diff --exit-code && { echo "formula unchanged despite a version bump"; exit 1; }
+          # --quiet exits 0 when the file is untouched, which here means the rewrite matched
+          # nothing and a bump PR would carry the old url. Tested inside `if` because a bare
+          # non-zero return would trip `set -e` on the path where the edit did land.
+          if git diff --quiet Formula/rocket-review.rb; then
+            echo "the version changed but the formula did not — check the sed patterns" >&2
+            exit 1
+          fi
 
       - name: Open the bump PR
         if: steps.check.outputs.changed == 'true'
