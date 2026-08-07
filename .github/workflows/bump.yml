@@ -13,6 +13,12 @@ on:
 # approve pull requests*, a single toggle that also grants approval — too much standing
 # authority for a version bump, in a repository where a merged formula runs code on
 # other people's machines.
+#
+# `contents: write` is still real authority: on its own it permits pushing to any
+# unprotected ref and calling the merge endpoint. What stops it reaching `main` here is
+# the branch ruleset (pull request + `CI Success` required, and this token is not a
+# bypass actor), not the permission block. Dropping `pull-requests: write` narrows what
+# this job can do; it does not make it harmless.
 permissions:
   contents: write
 
@@ -55,17 +61,41 @@ jobs:
         env:
           LATEST: ${{ steps.check.outputs.latest }}
           CURRENT: ${{ steps.check.outputs.current }}
+          SHA: ${{ steps.check.outputs.sha }}
         run: |
           set -euo pipefail
           branch="bump/rocket-review-$LATEST"
           repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           link="${repo}/compare/main...${branch}?expand=1"
 
-          # A re-run after a partial failure finds its own branch already there. Committing
-          # again would produce a different oid for identical content and the push would be
-          # refused as a non-fast-forward, so the branch is left alone and reported instead.
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            echo "branch $branch already exists — leaving it alone" >&2
+          # `--exit-code` reports 2 for "no such ref" and 128 for transport or auth
+          # failures. Reading anything non-zero as "absent" would turn a network blip into
+          # a confusing push failure a step later, so only 2 means absent.
+          set +e
+          git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>"$RUNNER_TEMP/ls.err"
+          rc=$?
+          set -e
+          case "$rc" in
+            0) exists=true ;;
+            2) exists=false ;;
+            *) echo "git ls-remote failed (exit $rc):" >&2; cat "$RUNNER_TEMP/ls.err" >&2
+               exit 1 ;;
+          esac
+
+          if [ "$exists" = true ]; then
+            # A re-run after a partial failure finds its own branch already there.
+            # Committing again would produce a different oid for identical content and the
+            # push would be refused, so it is left alone — but only after checking it
+            # really carries this release, since the name alone proves nothing about the
+            # sha256 a reviewer would then be asked to merge.
+            git fetch -q origin "$branch"
+            if ! git show "origin/$branch:Formula/rocket-review.rb" \
+                 | grep -qF "  sha256 \"$SHA\""; then
+              echo "branch $branch exists but does not carry sha256 $SHA — refusing to" \
+                   "advertise it as this bump; delete it or inspect it by hand" >&2
+              exit 1
+            fi
+            echo "branch $branch already carries $LATEST — leaving it alone" >&2
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
