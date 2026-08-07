@@ -38,15 +38,28 @@ jobs:
       - name: Test
         run: brew test ledger-rocket/tap/rocket-review
 
+  # The formula gates above cannot see the code that edits the formula. This one runs the
+  # bump's rewrite-and-guard against a fixture, which is the coverage whose absence let an
+  # inverted guard reach a scheduled run.
+  bump-logic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - name: Rewrite-formula checks
+        run: ./scripts/test-rewrite-formula.sh
+
   ci-success:
     name: CI Success
     if: ${{ always() }}
-    needs: [formula]
+    needs: [formula, bump-logic]
     runs-on: ubuntu-latest
     steps:
       - name: Require every gate to have passed
         run: |
-          if [ "${{ needs.formula.result }}" != "success" ]; then
-            echo "formula gate: ${{ needs.formula.result }}"
-            exit 1
-          fi
+          for gate in "formula=${{ needs.formula.result }}" \
+                      "bump-logic=${{ needs.bump-logic.result }}"; do
+            case "$gate" in
+              *=success) ;;
+              *) echo "$gate"; exit 1 ;;
+            esac
+          done
