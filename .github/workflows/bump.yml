@@ -9,9 +9,18 @@ on:
     - cron: "17 6 * * *"
   workflow_dispatch:
 
+# Push only. Opening the PR from here would need *Allow GitHub Actions to create and
+# approve pull requests*, a single toggle that also grants approval — too much standing
+# authority for a version bump, in a repository where a merged formula runs code on
+# other people's machines.
+#
+# `contents: write` is still real authority: on its own it permits pushing to any
+# unprotected ref and calling the merge endpoint. What stops it reaching `main` here is
+# the branch ruleset (pull request + `CI Success` required, and this token is not a
+# bypass actor), not the permission block. Dropping `pull-requests: write` narrows what
+# this job can do; it does not make it harmless.
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   bump:
@@ -42,38 +51,66 @@ jobs:
 
       - name: Rewrite the formula
         if: steps.check.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-          url='${{ steps.check.outputs.url }}'
-          sha='${{ steps.check.outputs.sha }}'
-          test -n "$url" && test -n "$sha"
-          sed -i "s|^  url \".*\"|  url \"$url\"|;s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
-            Formula/rocket-review.rb
-          # --quiet exits 0 when the file is untouched, which here means the rewrite matched
-          # nothing and a bump PR would carry the old url. Tested inside `if` because a bare
-          # non-zero return would trip `set -e` on the path where the edit did land.
-          if git diff --quiet Formula/rocket-review.rb; then
-            echo "the version changed but the formula did not — check the sed patterns" >&2
-            exit 1
-          fi
+        env:
+          URL: ${{ steps.check.outputs.url }}
+          SHA: ${{ steps.check.outputs.sha }}
+        run: scripts/rewrite-formula.sh Formula/rocket-review.rb "$URL" "$SHA"
 
-      - name: Open the bump PR
+      - name: Push the bump branch
         if: steps.check.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LATEST: ${{ steps.check.outputs.latest }}
           CURRENT: ${{ steps.check.outputs.current }}
+          SHA: ${{ steps.check.outputs.sha }}
         run: |
           set -euo pipefail
           branch="bump/rocket-review-$LATEST"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
-          git commit -qam "rocket-review $LATEST"
-          git push -q -u origin "$branch"
-          gh pr create --title "rocket-review $LATEST" --body "$(printf '%s\n' \
-            "Automated bump: \`$CURRENT\` → \`$LATEST\`, url and sha256 taken from the PyPI sdist." \
-            "" \
-            "**This PR's checks do not start on their own.** GitHub does not trigger workflows" \
-            "for PRs opened with the default \`GITHUB_TOKEN\`, so close and reopen it to run CI" \
-            "before merging. Merging without a green run ships an unverified formula.")"
+          repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          link="${repo}/compare/main...${branch}?expand=1"
+
+          # `--exit-code` reports 2 for "no such ref" and 128 for transport or auth
+          # failures. Reading anything non-zero as "absent" would turn a network blip into
+          # a confusing push failure a step later, so only 2 means absent.
+          set +e
+          git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>"$RUNNER_TEMP/ls.err"
+          rc=$?
+          set -e
+          case "$rc" in
+            0) exists=true ;;
+            2) exists=false ;;
+            *) echo "git ls-remote failed (exit $rc):" >&2; cat "$RUNNER_TEMP/ls.err" >&2
+               exit 1 ;;
+          esac
+
+          if [ "$exists" = true ]; then
+            # A re-run after a partial failure finds its own branch already there.
+            # Committing again would produce a different oid for identical content and the
+            # push would be refused, so it is left alone — but only after checking it
+            # really carries this release, since the name alone proves nothing about the
+            # sha256 a reviewer would then be asked to merge.
+            git fetch -q origin "$branch"
+            if ! git show "origin/$branch:Formula/rocket-review.rb" \
+                 | grep -qF "  sha256 \"$SHA\""; then
+              echo "branch $branch exists but does not carry sha256 $SHA — refusing to" \
+                   "advertise it as this bump; delete it or inspect it by hand" >&2
+              exit 1
+            fi
+            echo "branch $branch already carries $LATEST — leaving it alone" >&2
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -b "$branch"
+            git commit -qam "rocket-review $LATEST"
+            git push -q -u origin "$branch"
+          fi
+
+          {
+            echo "## rocket-review \`$CURRENT\` → \`$LATEST\`"
+            echo
+            echo "Formula bumped on \`$branch\`; url and sha256 read from the PyPI sdist."
+            echo
+            echo "**[Open the pull request]($link)**"
+            echo
+            echo "A human-opened PR starts CI on its own; one opened by"
+            echo "\`GITHUB_TOKEN\` would not."
+          } >> "$GITHUB_STEP_SUMMARY"
