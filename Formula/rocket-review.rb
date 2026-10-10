@@ -7,7 +7,7 @@ class RocketReview < Formula
   sha256 "06d1654bc19ce4f034cc91312090df3a58da4f570ed453750af2c7986d7afc85"
   license "Apache-2.0"
 
-  depends_on "python@3.13"
+  depends_on "python@3.14"
 
   def install
     virtualenv_install_with_resources
