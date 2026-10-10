@@ -86,6 +86,8 @@ changed=$(diff "$here/../Formula/rocket-review.rb" "$f" | grep -c '^>' || true)
 diff <(grep -vE '^  (url|sha256) ' "$here/../Formula/rocket-review.rb") \
      <(grep -vE '^  (url|sha256) ' "$f") >/dev/null \
     || fail "rewrite of the real formula changed a line other than url and sha256"
+# Pinned on purpose, to catch a formula that goes back to an older Python: a move of the
+# formula to a newer Python updates this line in the same change.
 grep -qxF '  depends_on "python@3.14"' "$f" \
     || fail "the rewritten formula does not depend on python@3.14"
 echo "ok: the real formula keeps python@3.14 through a rewrite"
