@@ -3,8 +3,8 @@ class RocketReview < Formula
 
   desc "Second-opinion code and plan reviews from Codex, Claude Code, or opencode"
   homepage "https://github.com/ledger-rocket/rocket-review"
-  url "https://files.pythonhosted.org/packages/52/d9/94a2c946a15f952ca7f87bd89a5fff39800f5c9c7a4ba5b6fb5a5487510c/rocket_review-0.3.2.tar.gz"
-  sha256 "06d1654bc19ce4f034cc91312090df3a58da4f570ed453750af2c7986d7afc85"
+  url "https://files.pythonhosted.org/packages/88/29/8c476c4b1f42aee362974466e14d11f73d39cd92b71e673c7144a1ea2725/rocket_review-0.6.0.tar.gz"
+  sha256 "3e26478079ca8ba0d6e90fc506dc0da1601c9e24583bd1b6565a99af42c946f5"
   license "Apache-2.0"
 
   depends_on "python@3.14"
