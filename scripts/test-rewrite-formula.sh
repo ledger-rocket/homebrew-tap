@@ -76,4 +76,20 @@ expect_exit 2 "wrong argument count" "$rewrite" "$f" "$NEW_URL"
 # A refused or mistyped call must never leave the formula half-edited.
 grep -qF "$OLD_URL" "$f" || fail "a refused call still modified the formula"
 
+# 6. On the real formula, the bump changes the url and sha256 lines and nothing else, so the
+#    Python the formula runs on survives every release. The bump branch is cut from main,
+#    so what main declares here is what every bump ships.
+f="$work/real.rb"; cp "$here/../Formula/rocket-review.rb" "$f"
+"$rewrite" "$f" "$NEW_URL" "$NEW_SHA" || fail "rewrite of the real formula exited non-zero"
+changed=$(diff "$here/../Formula/rocket-review.rb" "$f" | grep -c '^>' || true)
+[ "$changed" -eq 2 ] || fail "rewrite of the real formula changed $changed lines, expected 2"
+diff <(grep -vE '^  (url|sha256) ' "$here/../Formula/rocket-review.rb") \
+     <(grep -vE '^  (url|sha256) ' "$f") >/dev/null \
+    || fail "rewrite of the real formula changed a line other than url and sha256"
+# Pinned on purpose, to catch a formula that goes back to an older Python: a move of the
+# formula to a newer Python updates this line in the same change.
+grep -qxF '  depends_on "python@3.14"' "$f" \
+    || fail "the rewritten formula does not depend on python@3.14"
+echo "ok: the real formula keeps python@3.14 through a rewrite"
+
 echo "all rewrite-formula checks passed"
